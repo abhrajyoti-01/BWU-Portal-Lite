@@ -1,5 +1,7 @@
 # Brainware Portal Lite
 
+![License: All Rights Reserved](https://img.shields.io/badge/license-All%20Rights%20Reserved-red)
+
 A Telegram bot for the **Brainware University Student Self-Service** portal — attendance, fees,
 marks and notices in chat, with rich messages and instant button navigation.
 
@@ -46,6 +48,13 @@ both the keyboard above the message box and the buttons inside messages.
 ## 🚧 More features coming soon
 Planned next: results/grade cards, exam form reminders, fee due push alerts, and more quality-of-life
 updates. Suggestions are welcome via the bot.
+
+## License
+**Proprietary — All Rights Reserved.** See [LICENSE](LICENSE).
+
+Viewing and forking for personal reference is allowed. Using, running, modifying,
+redistributing, or operating this software as a service requires prior written
+permission ([@BWU_PRTL_BOT](https://t.me/BWU_PRTL_BOT)).
 
 ## Disclaimer
 Unofficial helper bot for personal use. Not affiliated with or endorsed by Brainware University.
