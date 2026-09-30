@@ -4,6 +4,8 @@ A Telegram bot for the **Brainware University Student Self-Service** portal — 
 marks and notices in chat, with rich messages and instant button navigation.
 
 > **Bot:** [@BWU_PRTL_BOT](https://t.me/BWU_PRTL_BOT)
+>
+> 🚧 **More features coming soon!**
 
 ## Features
 - 🔐 **Multi-user** — every student logs in with their own portal credentials
@@ -39,6 +41,10 @@ both the keyboard above the message box and the buttons inside messages.
 - The captcha is bypassed automatically on each login — nothing is stored from it.
 - No analytics, no trackers, no third-party sharing.
 - Use the bot only with **your own** student account.
+
+## 🚧 More features coming soon
+Planned next: results/grade cards, exam form reminders, fee due push alerts, and more quality-of-life
+updates. Suggestions are welcome via the bot.
 
 ## Disclaimer
 Unofficial helper bot for personal use. Not affiliated with or endorsed by Brainware University.
