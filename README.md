@@ -36,8 +36,9 @@ both the keyboard above the message box and the buttons inside messages.
 - **No database. No candidate/student data is saved anywhere** — not to disk, not to any DB.
 - Your portal credentials are held **in memory only** while you are logged in. They are dropped
   the moment you `/logout` or the bot restarts.
-- Each login is bound to your Telegram account only; sessions expire after a few idle minutes
-  and are refreshed transparently.
+- Each login is bound to your Telegram account only. **Everything is dropped from memory after
+  5 idle minutes** — credentials and session alike — or instantly on `/logout`, so nothing can
+  accumulate in RAM. Just `/login` again to continue.
 - The captcha is bypassed automatically on each login — nothing is stored from it.
 - No analytics, no trackers, no third-party sharing.
 - Use the bot only with **your own** student account.
