@@ -37,15 +37,15 @@ manager = SessionManager(
 pending_broadcast = set()
 dp = Dispatcher()
 
-ROUTES = {
-    "📊 Dashboard": "dash",
-    "💳 Fees & Payments": "fees",
-    "📝 Marks": "marks",
-    "🎓 Attendance": "att",
-    "📢 Notices": "notices",
-    "🚪 Logout": "logout",
-    "⚙️ Admin": "admin",
+STAGES = {
+    "dash": "↪️ Redirecting to the dashboard…",
+    "fees": "💳 Loading fee & payment details…",
+    "att": "📊 Loading attendance…",
+    "notices": "📢 Loading notices…",
+    "marks": "📝 Loading semester list…",
+    "logout": "🚪 Logout",
 }
+MARKS_STAGE = "⏳ Loading marks… (this page takes ~1 min)"
 
 
 def _reply_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
@@ -84,43 +84,24 @@ def _parse_login_args(text: str):
     return code, password
 
 
-class _ProgressEditor:
-    def __init__(self, bot: Bot, chat_id: int, message_id: int):
-        self._bot = bot
-        self._chat_id = chat_id
-        self._message_id = message_id
-        self._loop = asyncio.get_running_loop()
-        self._lock = asyncio.Lock()
-        self._last = ""
-
-    def __call__(self, text: str) -> None:
-        try:
-            asyncio.run_coroutine_threadsafe(self._set(text), self._loop)
-        except Exception:
-            pass
-
-    async def _set(self, text: str) -> None:
-        async with self._lock:
-            if text == self._last:
-                return
-            self._last = text
-            t, e = emoji.plain(text)
-            for attempt in (
-                lambda: self._bot.edit_message_text(chat_id=self._chat_id, message_id=self._message_id, text=t, entities=_ents(e)),
-                lambda: self._bot.edit_message_text(chat_id=self._chat_id, message_id=self._message_id, text=text),
-            ):
-                try:
-                    await attempt()
-                    return
-                except Exception:
-                    continue
-
-
 async def _edit(message: Message, text: str):
     t, e = emoji.plain(text)
     for attempt in (
         lambda: message.edit_text(t, entities=_ents(e)),
         lambda: message.edit_text(text),
+    ):
+        try:
+            return await attempt()
+        except Exception:
+            continue
+    return None
+
+
+async def _stage(bot: Bot, chat_id: int, message_id: int, text: str):
+    t, e = emoji.plain(text)
+    for attempt in (
+        lambda: bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=t, entities=_ents(e)),
+        lambda: bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text),
     ):
         try:
             return await attempt()
@@ -150,11 +131,13 @@ async def _qedit(query: CallbackQuery, text: str):
     return await _edit(query.message, text)
 
 
-async def send_rich(bot: Bot, chat_id: int, html: str, kb: dict = None, effect: bool = False, reply_to: int = None):
+async def send_rich(bot: Bot, chat_id: int, html: str, kb: dict = None, effect: bool = False,
+                    reply_to: int = None, rkb: ReplyKeyboardMarkup = None):
     try:
         return await bot(SendRichMessage(
             chat_id=chat_id,
             rich_message=InputRichMessage(html=emoji.wrap_rich(html)),
+            **({"reply_markup": rkb} if rkb else {}),
             **({"message_effect_id": config.TELEGRAM_EFFECT_ID} if effect and config.TELEGRAM_EFFECT_ID else {}),
             **({"reply_parameters": ReplyParameters(message_id=reply_to)} if reply_to else {}),
         ))
@@ -164,9 +147,9 @@ async def send_rich(bot: Bot, chat_id: int, html: str, kb: dict = None, effect: 
     t, e = emoji.plain(plain_text)
     rp = ReplyParameters(message_id=reply_to) if reply_to else None
     for attempt in (
-        lambda: bot.send_message(chat_id, t, entities=_ents(e), reply_markup=_kb(kb), reply_parameters=rp),
-        lambda: bot.send_message(chat_id, plain_text, reply_markup=_kb(kb), reply_parameters=rp),
-        lambda: bot.send_message(chat_id, plain_text, reply_markup=_kb(kb)),
+        lambda: bot.send_message(chat_id, t, entities=_ents(e), reply_markup=rkb or _kb(kb), reply_parameters=rp),
+        lambda: bot.send_message(chat_id, plain_text, reply_markup=rkb or _kb(kb), reply_parameters=rp),
+        lambda: bot.send_message(chat_id, plain_text, reply_markup=rkb or _kb(kb)),
     ):
         try:
             return await attempt()
@@ -176,14 +159,12 @@ async def send_rich(bot: Bot, chat_id: int, html: str, kb: dict = None, effect: 
 
 
 async def edit_rich(bot: Bot, chat_id: int, message_id: int, html: str, kb: dict = None):
-    params = {"chat_id": chat_id, "message_id": message_id, "rich_message": {"html": emoji.wrap_rich(html)}}
-    if kb:
-        params["reply_markup"] = kb
     try:
         return await bot(EditMessageText(
             chat_id=chat_id,
             message_id=message_id,
             rich_message=InputRichMessage(html=emoji.wrap_rich(html)),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[]),
         ))
     except Exception:
         pass
@@ -204,7 +185,8 @@ async def edit_rich(bot: Bot, chat_id: int, message_id: int, html: str, kb: dict
         return None
 
 
-async def _flow(route: str, bot: Bot, chat_id: int, message_id: int, user_id: int, first_name: str = ""):
+async def _flow(route: str, bot: Bot, chat_id: int, message_id: int, user_id: int,
+                first_name: str = "", set_stage: bool = True):
     try:
         if route == "logout":
             kb = messages.buttons_kb([[("✅ Yes, logout", "logout:yes"), ("❌ Cancel", "menu")]])
@@ -221,25 +203,23 @@ async def _flow(route: str, bot: Bot, chat_id: int, message_id: int, user_id: in
 
         if route == "menu":
             return await edit_rich(bot, chat_id, message_id, messages.menu_rich(first_name), messages.buttons_kb(messages.NAV))
+
+        stage = MARKS_STAGE if route.startswith("m:") else STAGES.get(route)
+        if set_stage and stage:
+            await _stage(bot, chat_id, message_id, stage)
+
         if route == "dash":
-            editor = _ProgressEditor(bot, chat_id, message_id)
-            snap = await client.snapshot(editor)
+            snap = await client.snapshot()
             dash = snap["dashboard"]
             dash["pay_rows"] = snap["payments"]["rows"]
             return await edit_rich(bot, chat_id, message_id, messages.dashboard_rich(dash, snap["name"], config.ATTENDANCE_THRESHOLD), messages.buttons_kb(messages.NAV))
         if route == "fees":
-            editor = _ProgressEditor(bot, chat_id, message_id)
-            editor("💳 Loading fee & payment details…")
             pay = await client.payments()
             return await edit_rich(bot, chat_id, message_id, messages.payments_rich(pay, config.FEE_WARN_DAYS), messages.buttons_kb(messages.NAV))
         if route == "att":
-            editor = _ProgressEditor(bot, chat_id, message_id)
-            editor("📊 Loading attendance…")
             dash = await client.dashboard()
             return await edit_rich(bot, chat_id, message_id, messages.attendance_rich(dash, config.ATTENDANCE_THRESHOLD), messages.buttons_kb(messages.NAV))
         if route == "notices":
-            editor = _ProgressEditor(bot, chat_id, message_id)
-            editor("📢 Loading notices…")
             dash = await client.dashboard()
             return await edit_rich(bot, chat_id, message_id, messages.notices_rich(dash["notices"], BASE_URL), messages.buttons_kb(messages.NAV))
         if route == "marks":
@@ -248,11 +228,8 @@ async def _flow(route: str, bot: Bot, chat_id: int, message_id: int, user_id: in
             return await edit_rich(bot, chat_id, message_id, messages.semester_menu_rich() + messages.buttons_html(messages.semester_rows(options)), kb)
         if route.startswith("m:"):
             sem = route.split(":", 1)[1]
-            editor = _ProgressEditor(bot, chat_id, message_id)
-            editor("⏳ Loading marks… (this page takes ~1 min)")
             options = await client.marks_options()
             label = next((o["label"] for o in options if o["value"] == sem), f"Semester {sem}")
-            editor(f"📝 Fetching {label} marks record…")
             marks = await client.marks(sem)
             kb = messages.buttons_kb(messages.semester_rows(options))
             return await edit_rich(bot, chat_id, message_id, messages.marks_rich(marks, label, options), kb)
@@ -276,8 +253,8 @@ async def cmd_start(message: Message):
         text = messages.menu_rich(name)
     else:
         text = messages.welcome_rich(name, is_admin)
-    await send_rich(message.bot, message.chat.id, text, effect=True, reply_to=message.message_id)
-    await message.answer("Menu:", reply_markup=_reply_kb(is_admin))
+    await send_rich(message.bot, message.chat.id, text, effect=True, reply_to=message.message_id,
+                    rkb=_reply_kb(is_admin))
 
 
 @dp.message(Command("login"))
@@ -287,21 +264,21 @@ async def cmd_login(message: Message, command: CommandObject):
         await _reply(message, "Usage:\n/login STUDENT_CODE:PASSWORD\nor /login STUDENT_CODE PASSWORD")
         return
     code, password = parsed
-    msg = await _reply(message, "🚀 Start login…")
+    msg = await _reply(message, "🧩 Bypassing captcha…")
     if msg is None:
         return
-    editor = _ProgressEditor(message.bot, msg.chat.id, msg.message_id)
     try:
-        await manager.login(message.from_user.id, code, password, editor)
+        await manager.login(message.from_user.id, code, password)
     except PortalError as exc:
         await _edit(msg, f"⚠️ Login failed: {escape(str(exc))}")
         return
     except Exception as exc:
         await _edit(msg, f"⚠️ Login error: {escape(str(exc))}")
         return
+    await _edit(msg, "↪️ Redirecting to the dashboard…")
     client = manager.get(message.from_user.id)
     try:
-        snap = await client.snapshot(editor)
+        snap = await client.snapshot()
         dash = snap["dashboard"]
         dash["pay_rows"] = snap["payments"]["rows"]
         await edit_rich(
@@ -315,14 +292,13 @@ async def cmd_login(message: Message, command: CommandObject):
         await edit_rich(
             message.bot, msg.chat.id, msg.message_id, messages.login_ok_rich(code), messages.buttons_kb(messages.NAV)
         )
-    await message.answer("Menu:", reply_markup=_reply_kb(message.from_user.id == config.ADMIN_USER_ID))
 
 
 @dp.message(Command("logout"))
 async def cmd_logout(message: Message):
-    msg = await _reply(message, "🚪 Logout")
+    msg = await _reply(message, STAGES["logout"])
     if msg is not None:
-        await _flow("logout", message.bot, msg.chat.id, msg.message_id, message.from_user.id)
+        await _flow("logout", message.bot, msg.chat.id, msg.message_id, message.from_user.id, set_stage=False)
 
 
 @dp.message(F.text)
@@ -345,16 +321,22 @@ async def on_text(message: Message):
         await _reply(message, f"📣 Broadcast sent to {sent} user(s).")
         return
 
-    route = ROUTES.get(text)
+    route = {
+        "📊 Dashboard": "dash",
+        "💳 Fees & Payments": "fees",
+        "📝 Marks": "marks",
+        "🎓 Attendance": "att",
+        "📢 Notices": "notices",
+        "🚪 Logout": "logout",
+        "⚙️ Admin": "admin",
+    }.get(text)
     if not route:
         return
-    status = {"dash": "📊 Loading dashboard…", "fees": "💳 Loading fee & payment details…",
-              "att": "📊 Loading attendance…", "notices": "📢 Loading notices…",
-              "marks": "📝 Loading semester list…", "logout": "🚪 Logout"}.get(route, "⏳ Loading…")
-    msg = await _reply(message, status)
+    msg = await _reply(message, STAGES.get(route, "⏳ Loading…"))
     if msg is None:
         return
-    await _flow(route, message.bot, msg.chat.id, msg.message_id, message.from_user.id, message.from_user.first_name or "")
+    await _flow(route, message.bot, msg.chat.id, msg.message_id, message.from_user.id,
+                message.from_user.first_name or "", set_stage=False)
 
 
 @dp.callback_query(F.data)
@@ -372,7 +354,7 @@ async def on_callback(query: CallbackQuery):
         if message_id:
             await edit_rich(bot, chat_id, message_id, text)
         else:
-            await send_rich(bot, chat_id, text, reply_to=None)
+            await send_rich(bot, chat_id, text)
         return
 
     if data == "admin:broadcast":
@@ -386,7 +368,8 @@ async def on_callback(query: CallbackQuery):
 
     if data == "admin:clear":
         if user.id != config.ADMIN_USER_ID:
-            await _qedit(query, "⛔ Admin only.")
+            if message_id:
+                await _qedit(query, "⛔ Admin only.")
             return
         n = await manager.clear()
         await _qedit(query, f"🧹 Cleared {n} stored session(s).")

@@ -2,13 +2,13 @@
 from datetime import datetime, timedelta
 from html import escape
 
-BANNER_1 = "https://www.brainwareuniversity.ac.in/promote-news/image/portal-banner.jpg"
 BANNER_2 = "https://www.brainwareuniversity.ac.in/studentselfservice/images/login.jpg"
 
 NAV = [
     [("📊 Dashboard", "dash"), ("💳 Fees & Payments", "fees")],
     [("📝 Marks", "marks"), ("🎓 Attendance", "att")],
     [("📢 Notices", "notices"), ("🚪 Logout", "logout")],
+    [("🏠 Menu", "menu")],
 ]
 
 
@@ -53,11 +53,10 @@ def _due_totals(rows: list) -> list:
 def welcome_rich(name: str, is_admin: bool) -> str:
     admin_note = "<p>⚙️ You are the <b>admin</b>.</p>" if is_admin else ""
     return "\n".join([
-        "<h2>🤖 BWU Portal Bot</h2>",
+        "<h2>🤖 Brainware Portal Bot</h2>",
         "<tg-slideshow>",
-        f'<img src="{BANNER_1}"/>',
         f'<img src="{BANNER_2}"/>',
-        "<figcaption>BWU Student Self-Service<cite>Brainware University</cite></figcaption>",
+        "<figcaption>Brainware Student Self-Service<cite>Brainware University</cite></figcaption>",
         "</tg-slideshow>",
         f"<p>Hi <b>{escape(name)}</b>! I log into the Brainware University "
         "Student Self-Service portal and report in rich style.</p>",
