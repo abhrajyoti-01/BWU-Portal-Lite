@@ -37,6 +37,57 @@ marks and notices in chat, with rich messages and instant button navigation.
 Everything else — Dashboard, Fees, Marks, Attendance, Notices, Logout — is **buttons**:
 both the keyboard above the message box and the buttons inside messages.
 
+## How it works
+
+### 🤖 The bot flow
+```mermaid
+sequenceDiagram
+    participant U as Student
+    participant B as Portal Lite bot
+    participant P as BWU Portal
+    U->>B: /login CODE PASSWORD
+    B->>U: your message is deleted instantly (it had your password!)
+    B->>P: fetch captcha PNG (own private session)
+    P-->>B: captcha image
+    B->>B: solve captcha locally (see below)
+    B->>P: submit credentials + code
+    P-->>B: logged in
+    B-->>U: Bypassing captcha -> Redirecting -> Dashboard
+    U->>B: buttons: Fees / Marks / Attendance / Feedback
+    B->>P: fetch pages (auto re-login if portal logged itself out)
+    B-->>U: rich tables, receipts, buttons
+    Note over U,P: 5 min idle -> everything wiped (see Security)
+```
+
+### 🧩 How the captcha is bypassed
+```mermaid
+flowchart TD
+    A["Fetch captcha PNG<br/>(bound to your session)"] --> B["Clean it up:<br/>grayscale, denoise, threshold"]
+    B --> C["Build 3 cleaned variants"]
+    C --> D["Local character recognition<br/>runs offline, in RAM only"]
+    D --> E["Vote: keep the most agreed 6-char code"]
+    E --> F{"Login accepted?"}
+    F -- "no" --> G["Fresh captcha, retry up to 5x"]
+    G --> A
+    F -- "yes" --> H["Logged in 🎉"]
+```
+
+### 🔒 Security: why there is nothing to leak
+```mermaid
+flowchart TD
+    L["You /login"] --> M["Your login message deleted from chat"]
+    M --> N["Credentials kept in RAM only"]
+    N --> O["Bot replies with portal data<br/>(messages tracked)"]
+    O --> Q{"Logout or<br/>5 minutes idle?"}
+    Q -- "yes" --> R["Wipe credentials from memory"]
+    R --> S["Delete every tracked message from the chat"]
+    Q -- "no" --> O
+    T["Receipt PDF requested"] --> U["Downloaded to RAM"]
+    U --> V["Sent to you"]
+    V --> W["Buffer zeroed + cleared"]
+    X[("Database / disk / logs")] -.->|"never used"| Z["Nothing to leak ❌"]
+```
+
 ## Honest notes — privacy & data
 - **No database. No candidate/student data is saved anywhere** — not to disk, not to any DB.
 - Your `/login` message (it contains your password) is **deleted from the chat instantly**, and
