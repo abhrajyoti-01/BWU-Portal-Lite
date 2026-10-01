@@ -14,7 +14,10 @@ marks and notices in chat, with rich messages and instant button navigation.
 - 🧩 **Captcha bypassed automatically** — just run `/login`, nothing to solve by hand
 - 📊 **Dashboard** — attendance %, upcoming fee, activities, exam status + full course-wise table
 - 💳 **Fees & Payments** — every fee head with amount, due date, paid date, receipt no and
-  `Fully Paid` / `Due` status, plus outstanding totals per due date
+  `Fully Paid` / `Due` status, plus outstanding totals per due date, and one-tap **receipt PDF
+  download** (delivered straight to chat — never stored on the server)
+- 🧾 **Student Feedback** — pick a course/topic, answer the questionnaire with buttons, submit;
+  switch to another course afterwards (already-submitted topics are detected)
 - 📝 **Marks Record** — pick a semester with buttons; all assessments (CT1/CT2, assignments,
   presentation, …) with full marks, marks obtained and totals
 - 🎓 **Attendance** — every subject with attended/total, percentage and low-attendance flags
@@ -36,11 +39,17 @@ both the keyboard above the message box and the buttons inside messages.
 
 ## Honest notes — privacy & data
 - **No database. No candidate/student data is saved anywhere** — not to disk, not to any DB.
+- Your `/login` message (it contains your password) is **deleted from the chat instantly**, and
+  bot messages showing portal data are **auto-deleted when the session expires** or on `/logout`.
 - Your portal credentials are held **in memory only** while you are logged in. They are dropped
   the moment you `/logout` or the bot restarts.
 - Each login is bound to your Telegram account only. **Everything is dropped from memory after
   5 idle minutes** — credentials and session alike — or instantly on `/logout`, so nothing can
   accumulate in RAM. Just `/login` again to continue.
+- The portal logs you out itself after some inactivity (no fixed time). Whenever that happens
+  the bot **re-logs-in silently** (captcha included) — your flow just continues.
+- Receipt PDFs are delivered from RAM and **zeroed immediately after sending** — never written
+  to the server disk.
 - The captcha is bypassed automatically on each login — nothing is stored from it.
 - No analytics, no trackers, no third-party sharing.
 - Use the bot only with **your own** student account.

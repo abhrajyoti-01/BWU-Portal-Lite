@@ -9,6 +9,7 @@ from aiogram.filters import Command, CommandObject
 from aiogram.methods import EditMessageText, SendRichMessage
 from aiogram.types import (
     BotCommand,
+    BufferedInputFile,
     CallbackQuery,
     InlineKeyboardMarkup,
     InputRichMessage,
@@ -22,6 +23,7 @@ from aiogram.types import (
 import config
 import emoji
 import messages
+import parsers
 from portal import PortalError
 from sessions import SessionManager
 
@@ -43,16 +45,19 @@ STAGES = {
     "att": "📊 Loading attendance…",
     "notices": "📢 Loading notices…",
     "marks": "📝 Loading semester list…",
+    "fb": "📝 Loading feedback…",
     "logout": "🚪 Logout",
 }
 MARKS_STAGE = "⏳ Loading marks… (this page takes ~1 min)"
+DATA_ROUTES = ("dash", "fees", "att", "notices", "marks", "fb")
 
 
 def _reply_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text="📊 Dashboard"), KeyboardButton(text="💳 Fees & Payments")],
         [KeyboardButton(text="📝 Marks"), KeyboardButton(text="🎓 Attendance")],
-        [KeyboardButton(text="📢 Notices"), KeyboardButton(text="🚪 Logout")],
+        [KeyboardButton(text="📢 Notices"), KeyboardButton(text="🧾 Feedback")],
+        [KeyboardButton(text="🚪 Logout")],
     ]
     if is_admin:
         rows.append([KeyboardButton(text="⚙️ Admin")])
@@ -102,6 +107,19 @@ async def _stage(bot: Bot, chat_id: int, message_id: int, text: str):
     for attempt in (
         lambda: bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=t, entities=_ents(e)),
         lambda: bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text),
+    ):
+        try:
+            return await attempt()
+        except Exception:
+            continue
+    return None
+
+
+async def _say(bot: Bot, chat_id: int, text: str):
+    t, e = emoji.plain(text)
+    for attempt in (
+        lambda: bot.send_message(chat_id, t, entities=_ents(e)),
+        lambda: bot.send_message(chat_id, text),
     ):
         try:
             return await attempt()
@@ -222,6 +240,8 @@ async def _flow(route: str, bot: Bot, chat_id: int, message_id: int, user_id: in
         if route == "notices":
             dash = await client.dashboard()
             return await edit_rich(bot, chat_id, message_id, messages.notices_rich(dash["notices"], BASE_URL), messages.buttons_kb(messages.NAV))
+        if route == "fb":
+            return await _fb_courses(bot, chat_id, message_id, client, user_id)
         if route == "marks":
             options = await client.marks_options()
             kb = messages.buttons_kb(messages.semester_rows(options))
@@ -244,6 +264,114 @@ async def _flow(route: str, bot: Bot, chat_id: int, message_id: int, user_id: in
     return None
 
 
+async def _fb_courses(bot: Bot, chat_id: int, message_id: int, client, user_id: int, note: str = ""):
+    if message_id:
+        await _stage(bot, chat_id, message_id, "📝 Loading feedback…")
+    courses = await client.feedback_courses()
+    kb = messages.buttons_kb(messages.feedback_course_rows(courses))
+    return await edit_rich(bot, chat_id, message_id, messages.feedback_courses_rich(courses, note), kb)
+
+
+async def _on_receipt(query: CallbackQuery, bot: Bot, chat_id: int, message_id, user_id: int, ref: str):
+    client = manager.get(user_id)
+    if not client:
+        if message_id:
+            await edit_rich(bot, chat_id, message_id, messages.login_prompt_rich())
+        return
+    if message_id:
+        await _stage(bot, chat_id, message_id, "🧾 Downloading receipt…")
+    buf = bytearray()
+    sent = False
+    try:
+        buf, fname = await client.receipt_file(ref)
+        doc = await bot.send_document(chat_id, BufferedInputFile(bytes(buf), filename=fname))
+        manager.track(user_id, chat_id, doc.message_id)
+        sent = True
+    except Exception:
+        sent = False
+    finally:
+        if buf:
+            buf[:] = b"\x00" * len(buf)
+            buf.clear()
+    if message_id:
+        text = "✅ Receipt sent. It is never stored on the server." if sent else "⚠️ Could not send receipt."
+        await edit_rich(bot, chat_id, message_id, text, messages.buttons_kb(messages.NAV))
+
+
+async def _on_feedback(query: CallbackQuery, bot: Bot, chat_id: int, message_id, user_id: int, data: str):
+    client = manager.get(user_id)
+    if not client:
+        if message_id:
+            await edit_rich(bot, chat_id, message_id, messages.login_prompt_rich())
+        return
+    try:
+        if data.startswith("fba:"):
+            _, idx_s, value = data.split(":", 2)
+            state = manager.get_fb(user_id)
+            if not state:
+                return await _fb_courses(bot, chat_id, message_id, client, user_id, "<p>⏳ Please choose the course again.</p>")
+            state["answers"][str(state["questions"][int(idx_s)]["n"])] = value
+            manager.set_fb(user_id, state)
+            nxt = int(idx_s) + 1
+            if nxt < len(state["questions"]):
+                return await edit_rich(bot, chat_id, message_id, messages.feedback_question_rich(state, nxt))
+            return await edit_rich(bot, chat_id, message_id, messages.feedback_summary_rich(state))
+
+        if data.startswith("fbs:"):
+            state = manager.get_fb(user_id)
+            if not state:
+                return await _fb_courses(bot, chat_id, message_id, client, user_id, "<p>⏳ Please choose the course again.</p>")
+            if message_id:
+                await _stage(bot, chat_id, message_id, "📝 Submitting feedback…")
+            fields = {}
+            for q in state["questions"]:
+                n = q["n"]
+                fields[f"question_bank_id_{n}"] = q["question_bank_id"]
+                fields[f"theory_lab_{n}"] = q["theory_lab"]
+                fields[f"faculty_id_{n}"] = q["faculty_id"]
+                fields[f"answer_no[{n}][]"] = state["answers"].get(str(n), "")
+            fields.update(state["hidden"])
+            fields["submit"] = "Submit"
+            html = await client.feedback_submit(fields)
+            manager.clear_fb(user_id)
+            if "submitted successfully" in html:
+                return await _fb_courses(bot, chat_id, message_id, client, user_id,
+                                         "<b>✅ Your Feedback information submitted successfully!</b> You can switch course below:")
+            return await _fb_courses(bot, chat_id, message_id, client, user_id,
+                                     "<mark>⚠️ Submission failed.</mark> Choose the course to try again:")
+
+        if data == "fbx":
+            manager.clear_fb(user_id)
+            return await _fb_courses(bot, chat_id, message_id, client, user_id)
+
+        if data.startswith("fb:"):
+            topic = data.split(":", 1)[1]
+            if message_id:
+                await _stage(bot, chat_id, message_id, "📝 Loading feedback form…")
+            html = await client.feedback_proceed(topic)
+            if parsers.feedback_status(html) == "taken":
+                return await _fb_courses(bot, chat_id, message_id, client, user_id,
+                                         "<mark>⚠️ Your feedback has been taken for this topic.</mark> Choose another:")
+            parsed = parsers.parse_feedback_questions(html)
+            if not parsed["questions"]:
+                return await _fb_courses(bot, chat_id, message_id, client, user_id,
+                                         "<p>⚠️ No questions found — choose another course.</p>")
+            state = {
+                "title": parsed["title"],
+                "hidden": parsed["hidden"],
+                "questions": parsed["questions"],
+                "answers": {},
+                "topic": topic,
+            }
+            manager.set_fb(user_id, state)
+            return await edit_rich(bot, chat_id, message_id, messages.feedback_question_rich(state, 0))
+    except Exception as exc:
+        try:
+            await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=f"⚠️ {escape(str(exc))}")
+        except Exception:
+            pass
+
+
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     user = message.from_user
@@ -264,7 +392,11 @@ async def cmd_login(message: Message, command: CommandObject):
         await _reply(message, "Usage:\n/login STUDENT_CODE:PASSWORD\nor /login STUDENT_CODE PASSWORD")
         return
     code, password = parsed
-    msg = await _reply(message, "🧩 Bypassing captcha…")
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    msg = await _say(message.bot, message.chat.id, "🧩 Bypassing captcha…")
     if msg is None:
         return
     try:
@@ -277,6 +409,7 @@ async def cmd_login(message: Message, command: CommandObject):
         return
     await _edit(msg, "↪️ Redirecting to the dashboard…")
     client = manager.get(message.from_user.id)
+    manager.track(message.from_user.id, msg.chat.id, msg.message_id)
     try:
         snap = await client.snapshot()
         dash = snap["dashboard"]
@@ -327,6 +460,7 @@ async def on_text(message: Message):
         "📝 Marks": "marks",
         "🎓 Attendance": "att",
         "📢 Notices": "notices",
+        "🧾 Feedback": "fb",
         "🚪 Logout": "logout",
         "⚙️ Admin": "admin",
     }.get(text)
@@ -337,6 +471,8 @@ async def on_text(message: Message):
         return
     await _flow(route, message.bot, msg.chat.id, msg.message_id, message.from_user.id,
                 message.from_user.first_name or "", set_stage=False)
+    if route == DATA_ROUTES or route.startswith("m:"):
+        manager.track(message.from_user.id, msg.chat.id, msg.message_id)
 
 
 @dp.callback_query(F.data)
@@ -375,11 +511,21 @@ async def on_callback(query: CallbackQuery):
         await _qedit(query, f"🧹 Cleared {n} stored session(s).")
         return
 
+    if data.startswith("rcpt:"):
+        await _on_receipt(query, bot, chat_id, message_id, user.id, data.split(":", 1)[1])
+        return
+
+    if data.startswith("fb"):
+        await _on_feedback(query, bot, chat_id, message_id, user.id, data)
+        return
+
     route = "menu" if data == "menu" else data
     if message_id is None:
         await send_rich(bot, chat_id, messages.menu_rich(user.first_name or ""), messages.buttons_kb(messages.NAV))
         return
     await _flow(route, bot, chat_id, message_id, user.id, user.first_name or "")
+    if route in DATA_ROUTES or route.startswith("m:"):
+        manager.track(user.id, chat_id, message_id)
 
 
 async def _run_digest(bot: Bot) -> None:
@@ -427,6 +573,15 @@ async def _on_startup(bot: Bot) -> None:
         BotCommand(command="login", description="Log in: /login CODE:PASSWORD"),
         BotCommand(command="logout", description="Log out of the portal"),
     ])
+
+    async def _delete_tracked(user_id: int, msgs) -> None:
+        for chat_id, message_id in msgs:
+            try:
+                await bot.delete_message(chat_id, message_id)
+            except Exception:
+                pass
+
+    manager.on_cleanup = _delete_tracked
     asyncio.create_task(_digest_loop(bot))
     asyncio.create_task(_sweep_loop())
 

@@ -97,18 +97,21 @@ class BwuClient:
         async with self._login_lock:
             await self._login_locked(progress)
 
-    async def _page(self, method: str, path: str, referer: str, data=None) -> str:
+    async def _fetch(self, method: str, path: str, referer: str, data=None):
         if not self._logged_in:
             async with self._login_lock:
                 if not self._logged_in:
                     await self._login_locked()
         url = path if path.startswith("http") else f"{BASE}/{path}"
-        body = (await self._request(method, url, referer, data=data)).text
-        if LOGGED_OUT_MARKER in body:
+        resp = await self._request(method, url, referer, data=data)
+        if LOGGED_OUT_MARKER.encode() in resp.content[:4000]:
             async with self._login_lock:
                 await self._login_locked()
-            body = (await self._request(method, url, referer, data=data)).text
-        return body
+            resp = await self._request(method, url, referer, data=data)
+        return resp
+
+    async def _page(self, method: str, path: str, referer: str, data=None) -> str:
+        return (await self._fetch(method, path, referer, data=data)).text
 
     async def logout(self) -> None:
         async with self._login_lock:
@@ -131,7 +134,42 @@ class BwuClient:
         return await self._page("GET", "student-how-to-use.php", f"{BASE}/redirect-to-dashboard.php")
 
     async def payments_html(self) -> str:
-        return await self._page("GET", "centre-student-payment.php?opt=show&type=n", f"{BASE}/redirect-to-dashboard.php")
+        return await self._page("GET", "centre-student-money-receipt.php?opt=show&type=n", f"{BASE}/redirect-to-dashboard.php")
+
+    async def receipt_file(self, receipt_ref: str):
+        referer = f"{BASE}/centre-student-money-receipt.php?opt=show&type=n"
+        try:
+            resp = await self._fetch("GET", f"{BASE}/centre-student-receipt-stud-print.php?id={receipt_ref}", referer)
+        except Exception:
+            resp = await self._fetch("GET", f"{BASE}/centre-student-receipt-stud-print.php?id='.{receipt_ref}.'", referer)
+        body = bytearray(resp.content)
+        ext = "pdf" if bytes(body[:4]) == b"%PDF" else "html"
+        return body, f"receipt-{receipt_ref}.{ext}"
+
+    async def feedback_html(self) -> str:
+        return await self._page("GET", "student-feeback.php", f"{BASE}/redirect-to-dashboard.php")
+
+    async def feedback_courses(self) -> list:
+        return parsers.parse_feedback_courses(await self.feedback_html())
+
+    async def feedback_proceed(self, topic_id: str) -> str:
+        return await self._page(
+            "POST",
+            "student-feeback.php",
+            f"{BASE}/student-feeback.php",
+            data={"topic_paper_id": str(topic_id), "submit": "Proceed"},
+        )
+
+    async def feedback_submit(self, fields: dict) -> str:
+        body = await self._page(
+            "POST",
+            "student-feeback-question-paper.php?windowmode=1",
+            f"{BASE}/student-feeback-question-paper.php?windowmode=1",
+            data=fields,
+        )
+        if "submitted successfully" in body:
+            return body
+        return await self._page("GET", "student-feeback.php?msg=add", f"{BASE}/student-feeback-question-paper.php?windowmode=1")
 
     async def marks_html(self, semester_id: str) -> str:
         return await self._page(

@@ -7,8 +7,8 @@ BANNER_2 = "https://www.brainwareuniversity.ac.in/studentselfservice/images/logi
 NAV = [
     [("📊 Dashboard", "dash"), ("💳 Fees & Payments", "fees")],
     [("📝 Marks", "marks"), ("🎓 Attendance", "att")],
-    [("📢 Notices", "notices"), ("🚪 Logout", "logout")],
-    [("🏠 Menu", "menu")],
+    [("📢 Notices", "notices"), ("🧾 Feedback", "fb")],
+    [("🚪 Logout", "logout"), ("🏠 Menu", "menu")],
 ]
 
 
@@ -144,8 +144,57 @@ def payments_rich(pay: dict, warn_days: int) -> str:
         f"<details><summary>🧾 All fee heads ({len(rows)})</summary>",
         '<table bordered striped compact><tr><th>Particulars</th><th>Fee</th><th>Due on</th>'
         "<th>Payment</th><th>Receipt</th><th>Status</th></tr>" + "".join(body) + "</table></details>",
-        buttons_html(NAV),
+        buttons_html(receipt_buttons_rows(rows) + NAV),
     ])
+
+
+def receipt_buttons_rows(rows: list) -> list:
+    btns = []
+    for r in rows:
+        ref = r.get("receipt_ref")
+        if ref:
+            digits = re.sub(r"\D", "", ref)
+            if digits:
+                btns.append((f"🧾 {r['receipt'] or digits}", f"rcpt:{digits}"))
+    return [btns[i:i + 2] for i in range(0, len(btns), 2)]
+
+
+def feedback_course_rows(courses: list) -> list:
+    btns = [(c["label"][:48], f"fb:{c['value']}") for c in courses]
+    rows = [btns[i:i + 2] for i in range(0, len(btns), 2)]
+    rows.append([("🏠 Menu", "menu")])
+    return rows
+
+
+def feedback_courses_rich(courses: list, note: str = "") -> str:
+    head = "<h2>🧾 Student Feedback</h2>"
+    if note:
+        head += f"<p>{note}</p>"
+    head += "<p>Choose a course / topic:</p>"
+    return head + "\n" + buttons_html(feedback_course_rows(courses))
+
+
+def feedback_question_rich(state: dict, idx: int) -> str:
+    q = state["questions"][idx]
+    rows = [[(opt["label"][:48], f"fba:{idx}:{opt['value']}")] for opt in q["options"]]
+    rows.append([("🏠 Menu", "menu")])
+    return "\n".join([
+        f"<h2>🧾 Feedback</h2><p><b>{escape(state['title'])}</b></p>",
+        f"<p>Question <b>{idx + 1}/{len(state['questions'])}</b></p>",
+        f"<p>{escape(q['text'])}</p>",
+        f"<p><i>Teacher: {escape(q['teacher'])}</i></p>",
+        buttons_html(rows),
+    ])
+
+
+def feedback_summary_rich(state: dict) -> str:
+    lines = [f"<h2>🧾 Feedback</h2><p><b>{escape(state['title'])}</b></p>", "<p>Review your answers:</p>"]
+    for q in state["questions"]:
+        ans = state["answers"].get(str(q["n"]))
+        label = next((o["label"] for o in q["options"] if o["value"] == ans), "—")
+        lines.append(f"<p><b>{q['n']}.</b> {escape(q['text'][:70])}<br/><i>{escape(label)}</i></p>")
+    lines.append(buttons_html([[("✅ Submit", "fbs:go"), ("🔙 Redo", "fbx")], [("🏠 Menu", "menu")]]))
+    return "\n".join(lines)
 
 
 def semester_rows(options: list, extra=None) -> list:

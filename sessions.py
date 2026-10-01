@@ -10,6 +10,8 @@ class SessionManager:
         self.retries = retries
         self.timeout = timeout
         self._sessions = {}
+        self._tracked = {}
+        self.on_cleanup = None
         self.total_logins = 0
 
     def _expired(self, entry: dict) -> bool:
@@ -29,12 +31,49 @@ class SessionManager:
 
         loop.create_task(_run())
 
+    def _purge_async(self, user_id: int) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._tracked.pop(user_id, None)
+            return
+        loop.create_task(self._purge_tracked(user_id))
+
+    async def _purge_tracked(self, user_id: int) -> None:
+        msgs = self._tracked.pop(user_id, [])
+        if msgs and self.on_cleanup:
+            try:
+                await self.on_cleanup(user_id, msgs)
+            except Exception:
+                pass
+
+    def track(self, user_id: int, chat_id: int, message_id: int) -> None:
+        lst = self._tracked.setdefault(user_id, [])
+        lst.append((chat_id, message_id))
+        if len(lst) > 100:
+            del lst[:-100]
+
+    def set_fb(self, user_id: int, state) -> None:
+        entry = self._sessions.get(user_id)
+        if entry:
+            entry["fb"] = state
+
+    def get_fb(self, user_id: int):
+        entry = self._sessions.get(user_id)
+        return entry.get("fb") if entry else None
+
+    def clear_fb(self, user_id: int) -> None:
+        entry = self._sessions.get(user_id)
+        if entry:
+            entry.pop("fb", None)
+
     async def login(self, user_id: int, code: str, password: str, progress=None) -> None:
         client = BwuClient(code, password, retries=self.retries, timeout=self.timeout)
         await client.login(progress)
         old = self._sessions.pop(user_id, None)
         if old:
             self._close_async(old["client"])
+            await self._purge_tracked(user_id)
         self._sessions[user_id] = {
             "client": client,
             "code": code,
@@ -43,13 +82,17 @@ class SessionManager:
         }
         self.total_logins += 1
 
+    def _drop(self, user_id: int, entry: dict) -> None:
+        self._sessions.pop(user_id, None)
+        self._close_async(entry["client"])
+        self._purge_async(user_id)
+
     def get(self, user_id: int):
         entry = self._sessions.get(user_id)
         if not entry:
             return None
         if self._expired(entry):
-            self._sessions.pop(user_id, None)
-            self._close_async(entry["client"])
+            self._drop(user_id, entry)
             return None
         entry["ts"] = time.time()
         return entry["client"]
@@ -59,8 +102,7 @@ class SessionManager:
         if not entry:
             return False
         if self._expired(entry):
-            self._sessions.pop(user_id, None)
-            self._close_async(entry["client"])
+            self._drop(user_id, entry)
             return False
         return True
 
@@ -76,6 +118,7 @@ class SessionManager:
             await entry["client"].close()
         except Exception:
             pass
+        await self._purge_tracked(user_id)
         return True
 
     async def clear(self) -> int:
@@ -94,6 +137,7 @@ class SessionManager:
                     await entry["client"].close()
                 except Exception:
                     pass
+            await self._purge_tracked(user_id)
         return len(expired)
 
     def user_ids(self) -> list:

@@ -31,6 +31,17 @@ DETAIL_RE = re.compile(
     r"(?s)<strong>\s*(?:Name|Programme|Semester)\s*(?:&nbsp;|\s)*:\s*</strong>\s*([^<]+)"
 )
 HREF_RE = re.compile(r"href=[\"']([^\"']+)[\"']")
+RECEIPT_LINK_RE = re.compile(r"receipt-stud-print\.php\?id=([^\"\s>]+)")
+FB_COURSE_SELECT_RE = re.compile(r"(?s)<select name=\"topic_paper_id\".*?</select>")
+FB_OPTION_RE = re.compile(r"<option value=['\"]([^'\"]+)['\"][^>]*>([^<]+)</option>")
+FB_Q_META_RE = re.compile(
+    r"(?s)<em>\s*(\d+)\s*</em></td><td[^>]*>\s*<em></em>\s*(.*?)"
+    r'<input type="hidden" name="question_bank_id_(\d+)" value="(\d+)">'
+)
+FB_HIDDEN_RE = re.compile(
+    r'<input type="hidden" name="(insert_counter|course_structure_id|module_semester_id|batch_id)" value="([^"]*)"'
+)
+FB_TITLE_RE = re.compile(r'bgcolor="gray"><strong>([^<]+)</strong>')
 CHROME_TITLES = {"Marks Record", "Student Details", "Marks Details"}
 
 
@@ -80,25 +91,35 @@ def parse_payments(html: str) -> dict:
         if "table-header" in tr:
             continue
         cells = CELL_RE.findall(tr)
-        if len(cells) < 8:
+        if len(cells) < 7:
             continue
-        vals = [clean(c) for c in cells[:8]]
+        vals = [clean(c) for c in cells[:7]]
         if not vals[0] or vals[0] == "Particulars":
             continue
         fee = re.match(r"([\d,]+)", vals[1])
+        fee_amount = fee.group(1) if fee else ""
+        status = vals[6]
+        if not fee_amount and not status:
+            continue
         pay_href = None
-        hm = HREF_RE.search(cells[7])
-        if hm and not hm.group(1).startswith("javascript"):
-            pay_href = hm.group(1)
+        if len(cells) > 7:
+            hm = HREF_RE.search(cells[7])
+            if hm and not hm.group(1).startswith("javascript"):
+                pay_href = hm.group(1)
+        receipt_ref = None
+        rm = RECEIPT_LINK_RE.search(cells[5])
+        if rm:
+            receipt_ref = rm.group(1).strip("'\".")
         rows.append({
             "particulars": vals[0],
-            "fee_amount": fee.group(1) if fee else vals[1],
+            "fee_amount": fee_amount or vals[1],
             "due_on": vals[2],
             "received": vals[3],
             "received_on": vals[4],
             "receipt": vals[5],
-            "status": vals[6],
+            "status": status,
             "pay_href": pay_href,
+            "receipt_ref": receipt_ref,
         })
     upcoming = FEE_RE.search(doc)
     return {
@@ -106,6 +127,57 @@ def parse_payments(html: str) -> dict:
         "upcoming_amount": upcoming.group(1) if upcoming else None,
         "upcoming_due": clean(upcoming.group(2)) if upcoming else None,
     }
+
+
+def parse_feedback_courses(html: str) -> list:
+    doc = strip_comments(html)
+    sel = FB_COURSE_SELECT_RE.search(doc)
+    if not sel:
+        return []
+    return [
+        {"value": v, "label": clean(label)}
+        for v, label in FB_OPTION_RE.findall(sel.group(0))
+        if v != "-1" and clean(label)
+    ]
+
+
+def feedback_status(html: str) -> str:
+    if "Your feedback has been taken" in html:
+        return "taken"
+    if "submitted successfully" in html:
+        return "success"
+    return ""
+
+
+def parse_feedback_questions(html: str) -> dict:
+    doc = strip_comments(html)
+    out = {"title": "", "hidden": {}, "questions": []}
+    m = FB_TITLE_RE.search(doc)
+    if m:
+        out["title"] = clean(m.group(1))
+    out["hidden"] = {name: value for name, value in FB_HIDDEN_RE.findall(doc)}
+    for qm in FB_Q_META_RE.finditer(doc):
+        num, text, qnum, qbank = qm.groups()
+        tail = doc[qm.end(): qm.end() + 5000]
+        teacher = re.search(r"<strong>([^<]+)</strong>", tail)
+        theory = re.search(rf'name="theory_lab_{qnum}" value="([^"]*)"', tail)
+        faculty = re.search(rf'name="faculty_id_{qnum}" value="([^"]*)"', tail)
+        sel = re.search(rf'(?s)<select name="answer_no\[{qnum}\]\[\]".*?</select>', tail)
+        options = []
+        if sel:
+            for ov, ol in re.findall(r'<option value="([^"]*)"[^>]*>\s*([^<]+?)\s*</option>', sel.group(0)):
+                if ov:
+                    options.append({"value": ov, "label": clean(ol)})
+        out["questions"].append({
+            "n": int(qnum),
+            "text": clean(text),
+            "question_bank_id": qbank,
+            "theory_lab": theory.group(1) if theory else "",
+            "faculty_id": faculty.group(1) if faculty else "",
+            "teacher": clean(teacher.group(1)) if teacher else "",
+            "options": options,
+        })
+    return out
 
 
 def parse_marks(html: str) -> dict:
