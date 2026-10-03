@@ -146,6 +146,33 @@ class BwuClient:
         ext = "pdf" if bytes(body[:4]) == b"%PDF" else "html"
         return body, f"receipt-{receipt_ref}.{ext}"
 
+    async def grade_card_html(self) -> str:
+        return await self._page("GET", "centre-student-online-original-grade-card.php", f"{BASE}/redirect-to-dashboard.php")
+
+    async def grade_card_form(self) -> dict:
+        return parsers.parse_grade_card_form(await self.grade_card_html())
+
+    async def grade_card_show(self, course_id: str, even_odd: str, sem: str, year: str, student_type: str = "R") -> str:
+        return await self._page(
+            "POST",
+            "centre-student-online-original-grade-card.php",
+            f"{BASE}/centre-student-online-original-grade-card.php",
+            data={
+                "course_id": str(course_id),
+                "even_odd": even_odd,
+                "module_semester_id": str(sem),
+                "session_year": str(year),
+                "student_type": student_type,
+                "show": "show",
+            },
+        )
+
+    async def grade_card_file(self, link: str, name: str = "grade-card"):
+        resp = await self._fetch("GET", f"{BASE}/{link.lstrip('/')}", f"{BASE}/centre-student-online-original-grade-card.php")
+        body = bytearray(resp.content)
+        ext = "pdf" if bytes(body[:4]) == b"%PDF" else "html"
+        return body, f"{name}.{ext}"
+
     async def feedback_html(self) -> str:
         return await self._page("GET", "student-feeback.php", f"{BASE}/redirect-to-dashboard.php")
 
@@ -170,6 +197,26 @@ class BwuClient:
         if "submitted successfully" in body:
             return body
         return await self._page("GET", "student-feeback.php?msg=add", f"{BASE}/student-feeback-question-paper.php?windowmode=1")
+
+    async def attendance_wise_html(self) -> str:
+        return await self._page("GET", "centre-report-batch-attendance-status-semester-wise.php", f"{BASE}/student-how-to-use.php")
+
+    async def attendance_wise_form(self) -> dict:
+        return parsers.parse_attendance_form(await self.attendance_wise_html())
+
+    async def attendance_wise(self, sem: str, from_date: str, to_date: str) -> str:
+        return await self._page(
+            "POST",
+            "centre-report-batch-attendance-status-semester-wise.php",
+            f"{BASE}/centre-report-batch-attendance-status-semester-wise.php",
+            data={
+                "faculty_id": "-1",
+                "module_semester_id": str(sem),
+                "from_date": from_date,
+                "to_date": to_date,
+                "show": "Show",
+            },
+        )
 
     async def marks_html(self, semester_id: str) -> str:
         return await self._page(

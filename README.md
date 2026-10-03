@@ -12,19 +12,22 @@ marks and notices in chat, with rich messages and instant button navigation.
 ## Features
 - 🔐 **Multi-user** — every student logs in with their own portal credentials
 - 🧩 **Captcha bypassed automatically** — just run `/login`, nothing to solve by hand
-- 📊 **Dashboard** — attendance %, upcoming fee, activities, exam status + full course-wise table
+- 🎓 **Attendance** — two modes: **Current** (course-wise table) and **Semester-wise** with a
+  selectable **From Date** (per-paper attended/total, percentages, totals and window info)
+- 📊 **Dashboard** — attendance %, payment status (`NO DUE` or upcoming fee), activities, and
+  **SGPA** (or exam status) + full course-wise table
 - 💳 **Fees & Payments** — every fee head with amount, due date, paid date, receipt no and
   `Fully Paid` / `Due` status, plus outstanding totals per due date, and one-tap **receipt PDF
   download** (delivered straight to chat — never stored on the server)
 - 🧾 **Student Feedback** — pick a course/topic, answer the questionnaire with buttons, submit;
   switch to another course afterwards (already-submitted topics are detected)
-- 📝 **Marks Record** — pick a semester with buttons; all assessments (CT1/CT2, assignments,
-  presentation, …) with full marks, marks obtained and totals
-- 🎓 **Attendance** — every subject with attended/total, percentage and low-attendance flags
+- 📝 **Marks** — two modes: **Current marks** (CT1/CT2, assignments, presentation per semester) and
+  **Semester grade card** (choose Even/Odd + semester + **examination year**, then download the
+  official grade card PDF — sent from RAM, never stored)
 - 📢 **Notices** — latest announcements as clickable links
 - ✨ **Rich Telegram messages** — real tables, expandable sections, banner slideshow, buttons
   inside the message, custom Premium emoji
-- ⏳ **Live progress** — `🚀 Start login… → 🧩 Solving captcha… → 📊 Loading dashboard… → 🏠 Main dashboard`
+- ⏳ **Live progress** — `🧩 Bypassing captcha… → ↪️ Redirecting to the dashboard… → dashboard`
 - 🚨 **Alerts** — attendance below threshold, fees due soon; optional daily digest
 - ⚙️ **Admin panel** — live stats, broadcast to users, clear sessions
 

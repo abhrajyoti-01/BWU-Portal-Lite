@@ -13,7 +13,10 @@ ATT_RE = re.compile(
 FEE_RE = re.compile(r"Payment\s*\(Rs\.?:\s*([\d,]+)\)\s*\[([^\]]+)\]")
 ACT_RE = re.compile(r"<h3>\s*(\d+)\s*</h3>\s*<p>\s*Number of Activities\s*</p>")
 EXAM_RE = re.compile(
-    r'(?s)<div class="small-box bg-red">\s*<div class="inner">\s*<h3>\s*([^<]*?)\s*</h3>\s*<p>\s*([^<]*?)\s*</p>'
+    r'(?s)<div class="small-box bg-red">\s*<div class="inner">\s*<h3[^>]*>\s*(.*?)\s*</h3>\s*<p>\s*(.*?)\s*</p>'
+)
+FEEBOX_RE = re.compile(
+    r'(?s)<div class="small-box bg-blue">\s*<div class="inner">\s*<h3[^>]*>\s*(.*?)\s*</h3>\s*<p>\s*(.*?)\s*</p>'
 )
 COURSE_RE = re.compile(
     r"(?s)<tr>\s*<td>([^<]+?)</td>\s*<td>([^<]+?)</td>\s*<td>([^<]+?)</td>\s*<td>([^<]+?)</td>\s*</tr>"
@@ -58,7 +61,7 @@ def strip_comments(html: str) -> str:
 
 def parse_dashboard(html: str) -> dict:
     doc = strip_comments(html)
-    out = {"attendance_pct": None, "fee_amount": None, "fee_due": None,
+    out = {"attendance_pct": None, "fee_amount": None, "fee_due": None, "fee_state": None,
            "activities": None, "exam_score": None, "exam_status": None,
            "courses": [], "notices": []}
     m = ATT_RE.search(doc)
@@ -67,21 +70,138 @@ def parse_dashboard(html: str) -> dict:
     m = FEE_RE.search(doc)
     if m:
         out["fee_amount"], out["fee_due"] = m.group(1), clean(m.group(2))
+        out["fee_state"] = "UPCOMING"
+    else:
+        fb = FEEBOX_RE.search(doc)
+        if fb:
+            out["fee_state"] = clean(fb.group(1)).upper() or None
     m = ACT_RE.search(doc)
     if m:
         out["activities"] = m.group(1)
     m = EXAM_RE.search(doc)
     if m:
         out["exam_score"], out["exam_status"] = clean(m.group(1)), clean(m.group(2))
-    out["courses"] = [
-        {"code": clean(a), "name": clean(b), "attended": clean(c), "percent": clean(d)}
-        for a, b, c, d in COURSE_RE.findall(doc)
-    ]
+        out["exam_status"] = re.sub(r"(\d+)\s+(th|st|nd|rd)\b", r"\1\2", out["exam_status"], flags=re.I)
+    out["courses"] = parse_course_rows(doc)
     out["notices"] = [
         {"url": u, "title": clean(t), "board": clean(b)}
         for u, t, b in NOTICE_RE.findall(doc)
     ]
     return out
+
+
+def parse_course_rows(html: str) -> list:
+    doc = strip_comments(html)
+    return [
+        {"code": clean(a), "name": clean(b), "attended": clean(c), "percent": clean(d)}
+        for a, b, c, d in COURSE_RE.findall(doc)
+    ]
+
+
+def parse_attendance_form(html: str) -> dict:
+    doc = strip_comments(html)
+    sel = SEM_SELECT_RE.search(doc)
+    options = [
+        {"value": v, "label": clean(label)}
+        for v, label in SEM_OPTION_RE.findall(sel.group(0))
+        if v != "-1"
+    ] if sel else []
+    out = {"options": options, "from_date": None, "to_date": None}
+    for name, key in (("from_date", "from_date"), ("to_date", "to_date")):
+        tag = re.search(rf'<input[^>]*name="{name}"[^>]*>', doc)
+        if tag:
+            vm = re.search(r'value="([^"]*)"', tag.group(0))
+            if vm:
+                out[key] = vm.group(1)
+    return out
+
+
+ATTWISE_ROW_RE = re.compile(
+    r'<tr><td[^>]*>\s*<strong>([^<]+?)\s*</strong>\s*</td><td[^>]*>\s*([0-9/]+)\(\s*([0-9.]+)\s*%\s*\)\s*</td></tr>'
+)
+ATTWISE_TOTAL_RE = re.compile(
+    r'<tr><td[^>]*>\s*<strong>Total</strong>\s*</td><td[^>]*>\s*<strong>\s*([0-9/]+)\(\s*([0-9.]+)\s*%\s*\)\s*</strong>\s*</td></tr>'
+)
+ATTWISE_HEAD_RE = re.compile(r'(?is)<div class="col-md-12" style="text-align:center;">(.*?)</div>')
+ATTWISE_HEAD_LINE_RE = re.compile(r"(?is)<strong>\s*(?:<u>)?\s*([^<]+?)\s*(?:</u>)?\s*</strong>")
+
+
+def parse_attendance_wise(html: str) -> dict:
+    doc = strip_comments(html)
+    idx = doc.find("</form>")
+    if idx != -1:
+        doc = doc[idx:]
+    out = {"courses": [], "total": None, "subtitle": ""}
+    for label, attended, percent in ATTWISE_ROW_RE.findall(doc):
+        label = clean(label)
+        if not label or label == "Total":
+            continue
+        m = re.match(r"(.*?)\s*\[([^\]]+)\]\s*$", label)
+        if m:
+            name, code = clean(m.group(1)), clean(m.group(2))
+        else:
+            name, code = label, ""
+        out["courses"].append({"code": code, "name": name, "attended": attended, "percent": percent})
+    m = ATTWISE_TOTAL_RE.search(doc)
+    if m:
+        out["total"] = {"attended": m.group(1), "percent": m.group(2)}
+    m = ATTWISE_HEAD_RE.search(doc)
+    if m:
+        lines = [clean(x) for x in ATTWISE_HEAD_LINE_RE.findall(m.group(1))]
+        if lines and lines[0].lower().startswith("attendance status"):
+            lines = lines[1:]
+        out["subtitle"] = " · ".join(x for x in lines if x)
+    return out
+
+
+GC_YEAR_SELECT_RE = re.compile(r'(?s)<select name="session_year".*?</select>')
+
+
+def parse_grade_card_form(html: str) -> dict:
+    doc = strip_comments(html)
+    out = {"course_id": None, "years": [], "student_type": "R"}
+    tag = re.search(r'<input[^>]*name="course_id"[^>]*>', doc)
+    if tag:
+        vm = re.search(r'value=[\'"]([^\'"]+)[\'"]', tag.group(0))
+        if vm:
+            out["course_id"] = vm.group(1)
+    sel = GC_YEAR_SELECT_RE.search(doc)
+    if sel:
+        out["years"] = [
+            {"value": v, "label": clean(label)}
+            for v, label in SEM_OPTION_RE.findall(sel.group(0))
+            if v != "-1"
+        ]
+    tag = re.search(r'(?s)<select name="student_type".*?</select>', doc)
+    if tag:
+        fm = re.search(r'<option value=[\'"]([^\'"]+)[\'"]', tag.group(0))
+        if fm:
+            out["student_type"] = fm.group(1)
+    return out
+
+
+def parse_grade_card_result(html: str) -> list:
+    doc = strip_comments(html)
+    rows = []
+    for tr in ROW_RE.findall(doc):
+        if "table-header" in tr:
+            continue
+        cells = CELL_RE.findall(tr)
+        if len(cells) < 6:
+            continue
+        link = HREF_RE.search(cells[5])
+        if not link or "grade-card-print" not in link.group(1):
+            continue
+        vals = [clean(c) for c in cells[:5]]
+        rows.append({
+            "code": vals[0],
+            "name": vals[1],
+            "roll": vals[2],
+            "reg": vals[3],
+            "reg_date": vals[4],
+            "link": link.group(1).replace("&amp;", "&").replace("&#38;", "&").replace("&quot;", '"').replace("&#39;", "'"),
+        })
+    return rows
 
 
 def parse_payments(html: str) -> dict:

@@ -83,9 +83,15 @@ def dashboard_rich(data: dict, name: str, threshold: int) -> str:
             continue
         if datetime.now() <= due_date <= datetime.now() + timedelta(days=7):
             alerts.append(f"<mark>⚠️ ₹{money(str(info['amount']))} fee due on {escape(due_on)}</mark>")
+    if d.get("fee_state") == "NO DUE":
+        fee_row = "<tr><td>💳 Payment</td><td><b>NO DUE</b> ✅</td></tr>"
+    elif d.get("fee_amount"):
+        fee_row = f"<tr><td>💳 Upcoming fee</td><td><b>₹{money(d['fee_amount'])}</b> due <b>{escape(d['fee_due'] or '-')}</b></td></tr>"
+    else:
+        fee_row = "<tr><td>💳 Payment</td><td><i>N/A</i></td></tr>"
     rows = [
         f"<tr><td>🎓 Attendance (current sem)</td><td><b>{escape(att)}%</b> <i>(alert under {threshold}%)</i></td></tr>",
-        f"<tr><td>💳 Upcoming fee</td><td><b>₹{money(d.get('fee_amount') or '')}</b> due <b>{escape(d.get('fee_due') or '-')}</b></td></tr>",
+        fee_row,
         f"<tr><td>🏅 Activities</td><td><b>{escape(d.get('activities') or '0')}</b></td></tr>",
         f"<tr><td>📝 Exam</td><td><b>{escape(exam)}</b>{' (' + escape(score) + ')' if score and score != '-' else ''}</td></tr>",
     ]
@@ -247,10 +253,28 @@ def menu_rich(name: str = "") -> str:
     return "\n".join(["<h2>🏠 Menu</h2>", who, "<p>Choose what to view:</p>", buttons_html(NAV)])
 
 
-def attendance_rich(data: dict, threshold: int) -> str:
+def attendance_pick_rich() -> str:
+    return "\n".join([
+        "<h2>🎓 Attendance</h2>",
+        "<p>Choose which attendance to view:</p>",
+        buttons_html([
+            [("📊 Current attendance", "att:cur")],
+            [("📅 Semester-wise", "att:sw")],
+            [("🏠 Menu", "menu")],
+        ]),
+    ])
+
+
+def attendance_rich(data: dict, threshold: int, title: str = "Current semester") -> str:
     d = data
-    att = d.get("attendance_pct") or "N/A"
+    att = d.get("attendance_pct")
     courses = d.get("courses", [])
+    head = f"<h2>🎓 Attendance</h2><p><b>{escape(title)}</b>"
+    if att:
+        head += f" — overall <b>{escape(att)}%</b>"
+    head += f"<br/><i>alert under {threshold}% · {len(courses)} papers</i></p>"
+    if d.get("subtitle"):
+        head += f"<p><i>{escape(d['subtitle'])}</i></p>"
     body = []
     for c in courses:
         pct = c["percent"]
@@ -264,11 +288,120 @@ def attendance_rich(data: dict, threshold: int) -> str:
             f'<td align="center">{escape(c["attended"])}</td>'
             f'<td align="center"><b>{escape(pct)}%</b>{flag}</td></tr>'
         )
+    if d.get("total"):
+        t = d["total"]
+        body.append(
+            '<tr><td colspan="3" align="right"><b>Total</b></td>'
+            f'<td align="center"><b>{escape(t["attended"])} · {escape(t["percent"])}%</b></td></tr>'
+        )
+    if not body:
+        body.append('<tr><td colspan="4">— no attendance data for this selection —</td></tr>')
     return "\n".join([
-        f"<h2>🎓 Attendance</h2><p>Overall <b>{escape(att)}%</b> · alert under <b>{threshold}%</b> · {len(courses)} papers</p>",
+        head,
         '<table bordered striped compact><tr><th>Course Code</th><th>Course Name</th>'
         "<th>Attended/Total</th><th>%</th></tr>" + "".join(body) + "</table>",
         buttons_html(NAV),
+    ])
+
+
+SEM_LABELS = {
+    "1": "Semester I", "2": "Semester II", "3": "Semester III", "4": "Semester IV",
+    "5": "Semester V", "6": "Semester VI", "14": "Semester VII", "15": "Semester VIII",
+    "17": "Semester IX", "18": "Semester X",
+}
+GC_SEMS = {"O": ["1", "3", "5", "14", "17"], "E": ["2", "4", "6", "15", "18"]}
+GC_PARITY_LABEL = {"O": "🌙 Odd or December", "E": "☀️ Even or June"}
+
+
+def marks_pick_rich() -> str:
+    return "\n".join([
+        "<h2>📝 Marks</h2>",
+        "<p>Choose which marks to view:</p>",
+        buttons_html([
+            [("📊 Current marks", "marks:cur")],
+            [("🎓 Semester grade card", "gc")],
+            [("🏠 Menu", "menu")],
+        ]),
+    ])
+
+
+def gc_parity_rich() -> str:
+    return "\n".join([
+        "<h2>🎓 Semester Grade Card</h2>",
+        "<p>Choose exam session:</p>",
+        buttons_html([
+            [("🌙 Odd or December — I, III, V…", "gce:O")],
+            [("☀️ Even or June — II, IV, VI…", "gce:E")],
+            [("🏠 Menu", "menu")],
+        ]),
+    ])
+
+
+def gc_sem_rows(parity: str) -> list:
+    btns = [(SEM_LABELS.get(v, v), f"gcs:{v}") for v in GC_SEMS.get(parity, [])]
+    rows = [btns[i:i + 2] for i in range(0, len(btns), 2)]
+    rows.append([("🏠 Menu", "menu")])
+    return rows
+
+
+def gc_sem_rich(parity: str) -> str:
+    return "\n".join([
+        f"<h2>🎓 Semester Grade Card</h2><p><b>{GC_PARITY_LABEL[parity]}</b></p>",
+        "<p>Choose semester:</p>",
+        buttons_html(gc_sem_rows(parity)),
+    ])
+
+
+def gc_year_rows(years: list) -> list:
+    btns = [(y["label"], f"gcy:{y['value']}") for y in years]
+    rows = [btns[i:i + 2] for i in range(0, len(btns), 2)]
+    rows.append([("🏠 Menu", "menu")])
+    return rows
+
+
+def gc_year_rich(state: dict) -> str:
+    parity = state.get("even_odd", "O")
+    sem_label = state.get("sem_label") or SEM_LABELS.get(state.get("sem", ""), "?")
+    return "\n".join([
+        f"<h2>🎓 Semester Grade Card</h2><p><b>{GC_PARITY_LABEL[parity]}</b> · <b>{escape(sem_label)}</b></p>",
+        "<p>Choose examination year:</p>",
+        buttons_html(gc_year_rows(state.get("years", []))),
+    ])
+
+
+def gc_result_rich(rows: list, state: dict) -> str:
+    parity = state.get("even_odd", "O")
+    sem_label = state.get("sem_label") or SEM_LABELS.get(state.get("sem", ""), "?")
+    year_label = state.get("year_label") or state.get("year") or "?"
+    head = (f"<h2>🎓 Semester Grade Card</h2>"
+            f"<p><b>{GC_PARITY_LABEL[parity]}</b> · <b>{escape(sem_label)}</b> · <b>{escape(year_label)}</b></p>")
+    if not rows:
+        return "\n".join([
+            head,
+            "<p><mark>⚠️ No grade card found for this selection.</mark></p>",
+            "<p>Try another combination:</p>",
+            buttons_html([
+                [("🌙 Odd or December", "gce:O")],
+                [("☀️ Even or June", "gce:E")],
+                [("🏠 Menu", "menu")],
+            ]),
+        ])
+    body = []
+    for r in rows:
+        body.append(
+            "<tr>"
+            f"<td>{escape(r['code'])}</td><td>{escape(r['name'])}</td>"
+            f"<td>{escape(r['roll'])}</td><td>{escape(r['reg'])}</td>"
+            f"<td>{escape(r['reg_date'])}</td></tr>"
+        )
+    return "\n".join([
+        head,
+        '<table bordered striped compact><tr><th>Code</th><th>Name</th><th>Roll</th><th>Reg. No</th><th>Reg. Date</th></tr>'
+        + "".join(body) + "</table>",
+        buttons_html([
+            [("🎓 Download Grade Card", "gcd:1")],
+            [("🏠 Menu", "menu")],
+        ]),
     ])
 
 

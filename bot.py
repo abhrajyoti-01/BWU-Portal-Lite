@@ -37,14 +37,18 @@ manager = SessionManager(
     timeout=config.HTTP_TIMEOUT,
 )
 pending_broadcast = set()
+att_pending = {}
+gc_pending = {}
 dp = Dispatcher()
 
 STAGES = {
     "dash": "↪️ Redirecting to the dashboard…",
     "fees": "💳 Loading fee & payment details…",
     "att": "📊 Loading attendance…",
+    "attsw": "📅 Loading semester-wise attendance…",
     "notices": "📢 Loading notices…",
-    "marks": "📝 Loading semester list…",
+    "marks": "📝 Loading marks…",
+    "marks:cur": "📝 Loading semester list…",
     "fb": "📝 Loading feedback…",
     "logout": "🚪 Logout",
 }
@@ -235,14 +239,25 @@ async def _flow(route: str, bot: Bot, chat_id: int, message_id: int, user_id: in
             pay = await client.payments()
             return await edit_rich(bot, chat_id, message_id, messages.payments_rich(pay, config.FEE_WARN_DAYS), messages.buttons_kb(messages.NAV))
         if route == "att":
-            dash = await client.dashboard()
-            return await edit_rich(bot, chat_id, message_id, messages.attendance_rich(dash, config.ATTENDANCE_THRESHOLD), messages.buttons_kb(messages.NAV))
+            kb = messages.buttons_kb([
+                [("📊 Current attendance", "att:cur")],
+                [("📅 Semester-wise", "att:sw")],
+                [("🏠 Menu", "menu")],
+            ])
+            return await edit_rich(bot, chat_id, message_id, messages.attendance_pick_rich(), kb)
         if route == "notices":
             dash = await client.dashboard()
             return await edit_rich(bot, chat_id, message_id, messages.notices_rich(dash["notices"], BASE_URL), messages.buttons_kb(messages.NAV))
         if route == "fb":
             return await _fb_courses(bot, chat_id, message_id, client, user_id)
         if route == "marks":
+            kb = messages.buttons_kb([
+                [("📊 Current marks", "marks:cur")],
+                [("🎓 Semester grade card", "gc")],
+                [("🏠 Menu", "menu")],
+            ])
+            return await edit_rich(bot, chat_id, message_id, messages.marks_pick_rich(), kb)
+        if route == "marks:cur":
             options = await client.marks_options()
             kb = messages.buttons_kb(messages.semester_rows(options))
             return await edit_rich(bot, chat_id, message_id, messages.semester_menu_rich() + messages.buttons_html(messages.semester_rows(options)), kb)
@@ -372,6 +387,196 @@ async def _on_feedback(query: CallbackQuery, bot: Bot, chat_id: int, message_id,
             pass
 
 
+async def _att_wise(bot: Bot, chat_id: int, message_id: int, user_id: int, sem: str,
+                    from_date: str, to_date: str, label: str):
+    client = manager.get(user_id)
+    if not client:
+        return await edit_rich(bot, chat_id, message_id, messages.login_prompt_rich())
+    try:
+        html = await client.attendance_wise(sem, from_date, to_date)
+        parsed = parsers.parse_attendance_wise(html)
+        data = {
+            "attendance_pct": None,
+            "courses": parsed["courses"],
+            "total": parsed["total"],
+            "subtitle": parsed["subtitle"],
+        }
+        await edit_rich(bot, chat_id, message_id,
+                        messages.attendance_rich(
+                            data,
+                            config.ATTENDANCE_THRESHOLD,
+                            f"Semester-wise · {label} · {from_date} → {to_date}",
+                        ),
+                        messages.buttons_kb(messages.NAV))
+    except Exception as exc:
+        try:
+            await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=f"⚠️ {escape(str(exc))}")
+        except Exception:
+            pass
+
+
+async def _on_attendance(query: CallbackQuery, bot: Bot, chat_id: int, message_id, user_id: int, data: str):
+    client = manager.get(user_id)
+    if not client:
+        if message_id:
+            await edit_rich(bot, chat_id, message_id, messages.login_prompt_rich())
+        return
+    try:
+        if data == "att:cur":
+            if message_id:
+                await _stage(bot, chat_id, message_id, "📊 Loading attendance…")
+            dash = await client.dashboard()
+            await edit_rich(bot, chat_id, message_id,
+                            messages.attendance_rich(dash, config.ATTENDANCE_THRESHOLD, "Current semester"),
+                            messages.buttons_kb(messages.NAV))
+            manager.track(user_id, chat_id, message_id)
+            return
+
+        if data == "att:sw":
+            if message_id:
+                await _stage(bot, chat_id, message_id, "📅 Loading semester-wise attendance…")
+            form = await client.attendance_wise_form()
+            att_pending[user_id] = {"from": form["from_date"], "to": form["to_date"], "options": form["options"]}
+            rows = [[(o["label"], f"atsw:{o['value']}")] for o in form["options"]]
+            rows.append([("🏠 Menu", "menu")])
+            kb = messages.buttons_kb(rows)
+            body = ("<h2>📅 Semester-wise attendance</h2>"
+                    f"<p>Default window: <b>{form['from_date'] or '?'} → {form['to_date'] or '?'}</b></p>"
+                    "<p>Choose semester:</p>" + messages.buttons_html(rows))
+            return await edit_rich(bot, chat_id, message_id, body, kb)
+
+        if data.startswith("atsw:"):
+            sem = data.split(":", 1)[1]
+            info = att_pending.setdefault(user_id, {})
+            options = info.get("options") or []
+            if not options:
+                form = await client.attendance_wise_form()
+                options = form["options"]
+                info["from"], info["to"] = form["from_date"], form["to_date"]
+            label = next((o["label"] for o in options if o["value"] == sem), f"Semester {sem}")
+            info.update({"sem": sem, "label": label, "awaiting_date": True})
+            from_d = info.get("from") or "?"
+            to_d = info.get("to") or "?"
+            kb = messages.buttons_kb([[("⏩ Use default window", f"atswd:{sem}")], [("🏠 Menu", "menu")]])
+            body = (f"<h2>📅 {escape(label)}</h2>"
+                    f"<p>Window: <b>{escape(from_d)}</b> → <b>{escape(to_d)}</b></p>"
+                    "<p>Send a <b>From Date</b> as <code>YYYY-MM-DD</code> —<br/>"
+                    "or tap ⏩ to use the default window:</p>" + messages.buttons_html([[("⏩ Use default window", f"atswd:{sem}")], [("🏠 Menu", "menu")]]))
+            return await edit_rich(bot, chat_id, message_id, body, kb)
+
+        if data.startswith("atswd:"):
+            sem = data.split(":", 1)[1]
+            info = att_pending.get(user_id, {})
+            options = info.get("options") or []
+            label = next((o["label"] for o in options if o["value"] == sem), f"Semester {sem}")
+            from_d = info.get("from") or (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+            to_d = info.get("to") or datetime.now().strftime("%Y-%m-%d")
+            att_pending.pop(user_id, None)
+            if message_id:
+                await _stage(bot, chat_id, message_id, "📅 Loading semester-wise attendance…")
+            await _att_wise(bot, chat_id, message_id, user_id, sem, from_d, to_d, label)
+            manager.track(user_id, chat_id, message_id)
+            return
+    except Exception as exc:
+        try:
+            await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=f"⚠️ {escape(str(exc))}")
+        except Exception:
+            pass
+
+
+async def _on_grade_card(query: CallbackQuery, bot: Bot, chat_id: int, message_id, user_id: int, data: str):
+    client = manager.get(user_id)
+    if not client:
+        if message_id:
+            await edit_rich(bot, chat_id, message_id, messages.login_prompt_rich())
+        return
+    state = gc_pending.setdefault(user_id, {})
+    try:
+        if data == "gc":
+            if message_id:
+                await _stage(bot, chat_id, message_id, "🎓 Loading grade card form…")
+            form = await client.grade_card_form()
+            state.clear()
+            state.update({
+                "course_id": form["course_id"],
+                "years": form["years"],
+                "student_type": form.get("student_type") or "R",
+            })
+            kb = messages.buttons_kb([
+                [("🌙 Odd or December", "gce:O")],
+                [("☀️ Even or June", "gce:E")],
+                [("🏠 Menu", "menu")],
+            ])
+            return await edit_rich(bot, chat_id, message_id, messages.gc_parity_rich(), kb)
+
+        if data.startswith("gce:"):
+            parity = data.split(":", 1)[1]
+            state["even_odd"] = parity
+            kb = messages.buttons_kb(messages.gc_sem_rows(parity))
+            return await edit_rich(bot, chat_id, message_id, messages.gc_sem_rich(parity), kb)
+
+        if data.startswith("gcs:"):
+            sem = data.split(":", 1)[1]
+            state["sem"] = sem
+            state["sem_label"] = messages.SEM_LABELS.get(sem, sem)
+            kb = messages.buttons_kb(messages.gc_year_rows(state.get("years", [])))
+            return await edit_rich(bot, chat_id, message_id, messages.gc_year_rich(state), kb)
+
+        if data.startswith("gcy:"):
+            year = data.split(":", 1)[1]
+            state["year"] = year
+            state["year_label"] = next((y["label"] for y in state.get("years", []) if y["value"] == year), year)
+            if message_id:
+                await _stage(bot, chat_id, message_id, "🎓 Fetching grade card…")
+            html = await client.grade_card_show(
+                state.get("course_id"), state.get("even_odd", "O"), state.get("sem"), year,
+                state.get("student_type") or "R",
+            )
+            rows = parsers.parse_grade_card_result(html)
+            if rows:
+                state["link"] = rows[0]["link"]
+                manager.track(user_id, chat_id, message_id)
+            kb = messages.buttons_kb(
+                [[("🎓 Download Grade Card", "gcd:1")], [("🏠 Menu", "menu")]]
+                if rows else
+                [[("🌙 Odd or December", "gce:O")], [("☀️ Even or June", "gce:E")], [("🏠 Menu", "menu")]]
+            )
+            return await edit_rich(bot, chat_id, message_id, messages.gc_result_rich(rows, state), kb)
+
+        if data.startswith("gcd:"):
+            link = state.get("link")
+            if not link:
+                return await edit_rich(bot, chat_id, message_id, messages.gc_parity_rich())
+            if message_id:
+                await _stage(bot, chat_id, message_id, "🎓 Downloading grade card…")
+            buf = bytearray()
+            sent = False
+            try:
+                name = f"grade-card-{state.get('sem_label', '')}-{state.get('year_label', '')}".replace(" ", "-")
+                buf, fname = await client.grade_card_file(link, name)
+                doc = await bot.send_document(chat_id, BufferedInputFile(bytes(buf), filename=fname))
+                manager.track(user_id, chat_id, doc.message_id)
+                sent = True
+            except Exception:
+                sent = False
+            finally:
+                if buf:
+                    buf[:] = b"\x00" * len(buf)
+                    buf.clear()
+            gc_pending.pop(user_id, None)
+            if message_id:
+                text = "✅ Grade card sent. It is never stored on the server." if sent else "⚠️ Could not send grade card."
+                await edit_rich(bot, chat_id, message_id, text, messages.buttons_kb(messages.NAV))
+                if sent:
+                    manager.track(user_id, chat_id, message_id)
+            return
+    except Exception as exc:
+        try:
+            await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=f"⚠️ {escape(str(exc))}")
+        except Exception:
+            pass
+
+
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     user = message.from_user
@@ -440,6 +645,22 @@ async def on_text(message: Message):
     if text.startswith("/"):
         return
 
+    if message.from_user.id in att_date_wait:
+        info = att_date_wait[message.from_user.id]
+        try:
+            datetime.strptime(text, "%Y-%m-%d")
+        except ValueError:
+            await _reply(message, "⚠️ Send the From Date as YYYY-MM-DD (e.g. 2026-09-01)")
+            return
+        att_date_wait.pop(message.from_user.id, None)
+        msg = await _reply(message, STAGES["attsw"])
+        if msg is None:
+            return
+        await _att_wise(message.bot, msg.chat.id, msg.message_id, message.from_user.id,
+                        info["sem"], text, info["to"], info["label"])
+        manager.track(message.from_user.id, msg.chat.id, msg.message_id)
+        return
+
     if message.from_user.id in pending_broadcast and message.from_user.id == config.ADMIN_USER_ID:
         pending_broadcast.discard(message.from_user.id)
         if not text:
@@ -471,7 +692,7 @@ async def on_text(message: Message):
         return
     await _flow(route, message.bot, msg.chat.id, msg.message_id, message.from_user.id,
                 message.from_user.first_name or "", set_stage=False)
-    if route == DATA_ROUTES or route.startswith("m:"):
+    if route in DATA_ROUTES or route.startswith("m:"):
         manager.track(message.from_user.id, msg.chat.id, msg.message_id)
 
 
@@ -513,6 +734,14 @@ async def on_callback(query: CallbackQuery):
 
     if data.startswith("rcpt:"):
         await _on_receipt(query, bot, chat_id, message_id, user.id, data.split(":", 1)[1])
+        return
+
+    if data.startswith("att:") or data.startswith("atsw:") or data.startswith("atswd:"):
+        await _on_attendance(query, bot, chat_id, message_id, user.id, data)
+        return
+
+    if data == "gc" or data.startswith(("gce:", "gcs:", "gcy:", "gcd:")):
+        await _on_grade_card(query, bot, chat_id, message_id, user.id, data)
         return
 
     if data.startswith("fb"):
