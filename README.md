@@ -22,8 +22,8 @@ marks and notices in chat, with rich messages and instant button navigation.
 - 🧾 **Student Feedback** — pick a course/topic, answer the questionnaire with buttons, submit;
   switch to another course afterwards (already-submitted topics are detected)
 - 📝 **Marks** — two modes: **Current marks** (CT1/CT2, assignments, presentation per semester) and
-  **Semester grade card** (choose Even/Odd + semester + **examination year**, then download the
-  official grade card PDF — sent from RAM, never stored)
+  **Semester grade card** — exam session (Even/Odd) and **examination year** on one screen
+  (year preselected, tap to change), then semester → official grade card PDF (RAM-only delivery)
 - 📢 **Notices** — latest announcements as clickable links
 - ✨ **Rich Telegram messages** — real tables, expandable sections, banner slideshow, buttons
   inside the message, custom Premium emoji

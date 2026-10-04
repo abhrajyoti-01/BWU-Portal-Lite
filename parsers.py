@@ -159,7 +159,7 @@ GC_YEAR_SELECT_RE = re.compile(r'(?s)<select name="session_year".*?</select>')
 
 def parse_grade_card_form(html: str) -> dict:
     doc = strip_comments(html)
-    out = {"course_id": None, "years": [], "student_type": "R"}
+    out = {"course_id": None, "years": [], "student_type": "R", "year_default": None}
     tag = re.search(r'<input[^>]*name="course_id"[^>]*>', doc)
     if tag:
         vm = re.search(r'value=[\'"]([^\'"]+)[\'"]', tag.group(0))
@@ -167,11 +167,12 @@ def parse_grade_card_form(html: str) -> dict:
             out["course_id"] = vm.group(1)
     sel = GC_YEAR_SELECT_RE.search(doc)
     if sel:
-        out["years"] = [
-            {"value": v, "label": clean(label)}
-            for v, label in SEM_OPTION_RE.findall(sel.group(0))
-            if v != "-1"
-        ]
+        for v, attrs, label in re.findall(r'<option value=[\'"]([^\'"]+)[\'"]([^>]*)>([^<]+)</option>', sel.group(0)):
+            if v == "-1":
+                continue
+            out["years"].append({"value": v, "label": clean(label)})
+            if out["year_default"] is None or "selected" in attrs:
+                out["year_default"] = v
     tag = re.search(r'(?s)<select name="student_type".*?</select>', doc)
     if tag:
         fm = re.search(r'<option value=[\'"]([^\'"]+)[\'"]', tag.group(0))

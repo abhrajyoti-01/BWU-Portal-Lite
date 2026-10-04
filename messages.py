@@ -325,16 +325,34 @@ def marks_pick_rich() -> str:
     ])
 
 
-def gc_parity_rich() -> str:
-    return "\n".join([
-        "<h2>🎓 Semester Grade Card</h2>",
-        "<p>Choose exam session:</p>",
-        buttons_html([
-            [("🌙 Odd or December — I, III, V…", "gce:O")],
-            [("☀️ Even or June — II, IV, VI…", "gce:E")],
-            [("🏠 Menu", "menu")],
-        ]),
-    ])
+def gc_session_rows(state: dict) -> list:
+    rows = [
+        [("🌙 Odd or December", "gce:O"), ("☀️ Even or June", "gce:E")],
+    ]
+    year = state.get("year")
+    btns = []
+    for y in state.get("years", []):
+        mark = " ✅" if y["value"] == year else ""
+        btns.append((y["label"] + mark, f"gcy:{y['value']}"))
+    rows.extend(btns[i:i + 2] for i in range(0, len(btns), 2))
+    rows.append([("🏠 Menu", "menu")])
+    return rows
+
+
+def gc_session_rich(state: dict, note: str = "") -> str:
+    sel = []
+    if state.get("even_odd"):
+        sel.append(GC_PARITY_LABEL[state["even_odd"]])
+    if state.get("year_label") or state.get("year"):
+        sel.append(escape(state.get("year_label") or state.get("year")))
+    lines = ["<h2>🎓 Semester Grade Card</h2>"]
+    if sel:
+        lines.append(f"<p>Selected: <b>{' · '.join(sel)}</b></p>")
+    if note:
+        lines.append(f"<p>{note}</p>")
+    lines.append("<p>🌙/☀️ exam session &amp; 📅 examination year:</p>")
+    lines.append(buttons_html(gc_session_rows(state)))
+    return "\n".join(lines)
 
 
 def gc_sem_rows(parity: str) -> list:
@@ -359,16 +377,6 @@ def gc_year_rows(years: list) -> list:
     return rows
 
 
-def gc_year_rich(state: dict) -> str:
-    parity = state.get("even_odd", "O")
-    sem_label = state.get("sem_label") or SEM_LABELS.get(state.get("sem", ""), "?")
-    return "\n".join([
-        f"<h2>🎓 Semester Grade Card</h2><p><b>{GC_PARITY_LABEL[parity]}</b> · <b>{escape(sem_label)}</b></p>",
-        "<p>Choose examination year:</p>",
-        buttons_html(gc_year_rows(state.get("years", []))),
-    ])
-
-
 def gc_result_rich(rows: list, state: dict) -> str:
     parity = state.get("even_odd", "O")
     sem_label = state.get("sem_label") or SEM_LABELS.get(state.get("sem", ""), "?")
@@ -379,10 +387,8 @@ def gc_result_rich(rows: list, state: dict) -> str:
         return "\n".join([
             head,
             "<p><mark>⚠️ No grade card found for this selection.</mark></p>",
-            "<p>Try another combination:</p>",
             buttons_html([
-                [("🌙 Odd or December", "gce:O")],
-                [("☀️ Even or June", "gce:E")],
+                [("🔀 Change session / year", "gc")],
                 [("🏠 Menu", "menu")],
             ]),
         ])

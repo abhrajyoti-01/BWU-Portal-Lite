@@ -497,40 +497,43 @@ async def _on_grade_card(query: CallbackQuery, bot: Bot, chat_id: int, message_i
                 await _stage(bot, chat_id, message_id, "🎓 Loading grade card form…")
             form = await client.grade_card_form()
             state.clear()
+            years = form["years"]
+            default_year = form.get("year_default") or (years[0]["value"] if years else None)
             state.update({
                 "course_id": form["course_id"],
-                "years": form["years"],
+                "years": years,
                 "student_type": form.get("student_type") or "R",
+                "year": default_year,
+                "year_label": next((y["label"] for y in years if y["value"] == default_year), default_year),
             })
-            kb = messages.buttons_kb([
-                [("🌙 Odd or December", "gce:O")],
-                [("☀️ Even or June", "gce:E")],
-                [("🏠 Menu", "menu")],
-            ])
-            return await edit_rich(bot, chat_id, message_id, messages.gc_parity_rich(), kb)
+            note = "Year is preselected — tap to change. Choose a session to continue."
+            return await edit_rich(bot, chat_id, message_id, messages.gc_session_rich(state, note),
+                                   messages.buttons_kb(messages.gc_session_rows(state)))
 
-        if data.startswith("gce:"):
-            parity = data.split(":", 1)[1]
-            state["even_odd"] = parity
-            kb = messages.buttons_kb(messages.gc_sem_rows(parity))
-            return await edit_rich(bot, chat_id, message_id, messages.gc_sem_rich(parity), kb)
+        if data.startswith("gce:") or data.startswith("gcy:"):
+            if data.startswith("gce:"):
+                state["even_odd"] = data.split(":", 1)[1]
+            else:
+                year = data.split(":", 1)[1]
+                state["year"] = year
+                state["year_label"] = next((y["label"] for y in state.get("years", []) if y["value"] == year), year)
+            if state.get("even_odd") and state.get("year"):
+                parity = state["even_odd"]
+                kb = messages.buttons_kb(messages.gc_sem_rows(parity))
+                return await edit_rich(bot, chat_id, message_id, messages.gc_sem_rich(parity), kb)
+            note = "Now choose the examination year." if state.get("even_odd") else "Now choose the exam session."
+            return await edit_rich(bot, chat_id, message_id, messages.gc_session_rich(state, note),
+                                   messages.buttons_kb(messages.gc_session_rows(state)))
 
         if data.startswith("gcs:"):
             sem = data.split(":", 1)[1]
             state["sem"] = sem
             state["sem_label"] = messages.SEM_LABELS.get(sem, sem)
-            kb = messages.buttons_kb(messages.gc_year_rows(state.get("years", [])))
-            return await edit_rich(bot, chat_id, message_id, messages.gc_year_rich(state), kb)
-
-        if data.startswith("gcy:"):
-            year = data.split(":", 1)[1]
-            state["year"] = year
-            state["year_label"] = next((y["label"] for y in state.get("years", []) if y["value"] == year), year)
             if message_id:
                 await _stage(bot, chat_id, message_id, "🎓 Fetching grade card…")
             html = await client.grade_card_show(
-                state.get("course_id"), state.get("even_odd", "O"), state.get("sem"), year,
-                state.get("student_type") or "R",
+                state.get("course_id"), state.get("even_odd", "O"), sem,
+                state.get("year") or "", state.get("student_type") or "R",
             )
             rows = parsers.parse_grade_card_result(html)
             if rows:
@@ -539,14 +542,15 @@ async def _on_grade_card(query: CallbackQuery, bot: Bot, chat_id: int, message_i
             kb = messages.buttons_kb(
                 [[("🎓 Download Grade Card", "gcd:1")], [("🏠 Menu", "menu")]]
                 if rows else
-                [[("🌙 Odd or December", "gce:O")], [("☀️ Even or June", "gce:E")], [("🏠 Menu", "menu")]]
+                [[("🔀 Change session / year", "gc")], [("🏠 Menu", "menu")]]
             )
             return await edit_rich(bot, chat_id, message_id, messages.gc_result_rich(rows, state), kb)
 
         if data.startswith("gcd:"):
             link = state.get("link")
             if not link:
-                return await edit_rich(bot, chat_id, message_id, messages.gc_parity_rich())
+                return await edit_rich(bot, chat_id, message_id, messages.gc_session_rich(state),
+                                       messages.buttons_kb(messages.gc_session_rows(state)))
             if message_id:
                 await _stage(bot, chat_id, message_id, "🎓 Downloading grade card…")
             buf = bytearray()
