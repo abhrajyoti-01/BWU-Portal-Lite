@@ -309,8 +309,10 @@ async def _on_receipt(query: CallbackQuery, bot: Bot, chat_id: int, message_id, 
             buf[:] = b"\x00" * len(buf)
             buf.clear()
     if message_id:
-        text = "✅ Receipt sent. It is never stored on the server." if sent else "⚠️ Could not send receipt."
-        await edit_rich(bot, chat_id, message_id, text, messages.buttons_kb(messages.NAV))
+        base = "✅ Receipt sent. It is never stored on the server." if sent else "⚠️ Could not send receipt."
+        rows = [[("🏠 Menu", "menu")]]
+        await edit_rich(bot, chat_id, message_id, base + "\n" + messages.buttons_html(rows),
+                        messages.buttons_kb(rows))
 
 
 async def _on_feedback(query: CallbackQuery, bot: Bot, chat_id: int, message_id, user_id: int, data: str):
@@ -569,8 +571,10 @@ async def _on_grade_card(query: CallbackQuery, bot: Bot, chat_id: int, message_i
                     buf.clear()
             gc_pending.pop(user_id, None)
             if message_id:
-                text = "✅ Grade card sent. It is never stored on the server." if sent else "⚠️ Could not send grade card."
-                await edit_rich(bot, chat_id, message_id, text, messages.buttons_kb(messages.NAV))
+                base = "✅ Grade card sent. It is never stored on the server." if sent else "⚠️ Could not send grade card."
+                rows = [[("🏠 Menu", "menu")]]
+                await edit_rich(bot, chat_id, message_id, base + "\n" + messages.buttons_html(rows),
+                                messages.buttons_kb(rows))
                 if sent:
                     manager.track(user_id, chat_id, message_id)
             return
