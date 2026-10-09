@@ -322,6 +322,9 @@ async def _on_feedback(query: CallbackQuery, bot: Bot, chat_id: int, message_id,
             await edit_rich(bot, chat_id, message_id, messages.login_prompt_rich())
         return
     try:
+        if data == "fb":
+            return await _fb_courses(bot, chat_id, message_id, client, user_id)
+
         if data.startswith("fba:"):
             _, idx_s, value = data.split(":", 2)
             state = manager.get_fb(user_id)

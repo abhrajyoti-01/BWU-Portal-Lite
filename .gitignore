@@ -4,3 +4,4 @@ __pycache__/
 bot.pid
 bot.log
 .vscode/
+.commandcode/
